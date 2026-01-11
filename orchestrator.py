@@ -18,7 +18,8 @@ class TaskOrchestrator:
         self.max_retries = 3
         # Always use the best Pro model for all tasks
         self.complex_model = choose_model("complex")
-        self.simple_model = choose_model("complex")  # Use best model even for "simple" tasks
+        self.simple_model = choose_model("complex")  # Use best model for execution too
+        self.project_created = False  # Track if project was actually created
     
     def log(self, message, level="INFO", verbose=False):
         """Log execution events - simplified output."""
@@ -259,7 +260,8 @@ class TaskOrchestrator:
                 
                 while retry_count < self.max_retries and not success:
                     try:
-                        for chunk in execute(step, self.simple_model, previous_results):
+                        # Use complex model for execution to ensure high-quality outputs with proper code blocks
+                        for chunk in execute(step, self.complex_model, previous_results):
                             print(chunk, end="", flush=True)
                             step_output += chunk
                         print()  # New line after streaming
@@ -329,19 +331,31 @@ class TaskOrchestrator:
             # Step 7: Create project folder and save files
             project_path = None
             saved_files = []
+            self.project_created = False
             try:
                 # Check if output contains code (likely a project)
                 if any(keyword in final_output.lower() for keyword in 
                        ["```", "<!doctype", "<html", "def ", "function", "class ", "import ", "const ", "let "]):
                     self.log("Creating project", "PROJECT")
                     project_path, saved_files = setup_project(task, final_output, summary)
-                    if project_path:
-                        print(f"📁 Project: {os.path.basename(project_path)}")
                     
-                    # Try to run the project
-                    if saved_files:
+                    # Verify project was created and has files
+                    if project_path and saved_files and len(saved_files) > 0:
+                        self.project_created = True
+                        print(f"📁 Project: {os.path.basename(project_path)}")
+                        print(f"📄 Files saved: {', '.join(saved_files)}")
+                        
+                        # Try to run the project
                         self.log("Running project", "RUN", verbose=True)
-                        run_success = run_project(project_path)
+                        try:
+                            run_success = run_project(project_path)
+                        except Exception as run_error:
+                            self.log(f"Project run warning: {str(run_error)[:100]}", "WARNING", verbose=True)
+                    else:
+                        self.log(f"Project creation resulted in no files. Output may not contain valid code.", "WARNING")
+                        self.log(f"Saved files: {saved_files}, Path: {project_path}", "INFO", verbose=True)
+                else:
+                    self.log("Output does not appear to contain code (no project created)", "INFO")
             except Exception as e:
                 self.log(f"Project creation error: {str(e)}", "WARNING", verbose=True)
             
@@ -352,12 +366,17 @@ class TaskOrchestrator:
             except Exception as e:
                 pass  # Silent fail for memory
             
+            # Final verification - log actual completion status
+            if not self.project_created and any(keyword in final_output.lower() for keyword in ["```", "def ", "function", "class "]):
+                self.log("⚠️  Code was generated but project creation failed - review output above", "WARNING")
+            
             self.log("Task completed", "SUCCESS")
             
             return {
                 "status": "success",
                 "final_output": final_output,
                 "summary": summary,
+                "project_created": self.project_created,
                 "execution_log": self.execution_log,
                 "steps_executed": len(steps),
                 "project_path": project_path,

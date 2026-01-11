@@ -28,49 +28,60 @@ def create_project_folder(task_name):
     return project_path, folder_name
 
 def extract_code_blocks(text):
-    """Extract code blocks from markdown or plain text."""
+    """Extract code blocks from markdown or plain text with improved detection."""
     files = {}
+    extracted_codes = set()  # Track already extracted code to avoid duplicates
     
     # Pattern 1: Markdown code blocks with language and filename
     # ```javascript:filename.js
     # code
     # ```
-    pattern1 = r'```(\w+)?:?([^\n]+)?\n(.*?)```'
+    pattern1 = r'```(\w+)?:?([^\n`]+)?\n(.*?)```'
     matches1 = re.finditer(pattern1, text, re.DOTALL)
     for match in matches1:
         lang = match.group(1) or 'text'
         filename = match.group(2) or f'code.{lang}'
         code = match.group(3).strip()
         filename = filename.strip().strip('`').strip()
-        if filename and code:
+        if filename and code and len(code) > 10:  # Require minimum code length
             files[filename] = code
+            extracted_codes.add(code[:100])  # Track first 100 chars
     
-    # Pattern 2: Standard markdown code blocks
-    pattern2 = r'```(\w+)?\n(.*?)```'
+    # Pattern 2: Standard markdown code blocks (improved)
+    # Better detection that handles more markdown variations
+    pattern2 = r'```\s*(\w+)?\s*\n(.*?)```'
     matches2 = re.finditer(pattern2, text, re.DOTALL)
     for match in matches2:
         lang = match.group(1) or 'text'
         code = match.group(2).strip()
-        if code and not any(code in f for f in files.values()):
-            # Try to infer filename from language
-            ext_map = {
-                'javascript': 'script.js',
-                'js': 'script.js',
-                'html': 'index.html',
-                'css': 'style.css',
-                'python': 'script.py',
-                'py': 'script.py',
-                'java': 'Main.java',
-                'cpp': 'main.cpp',
-                'c': 'main.c',
-                'json': 'data.json',
-                'xml': 'data.xml',
-                'yaml': 'config.yaml',
-                'yml': 'config.yml',
-            }
-            filename = ext_map.get(lang.lower(), f'code.{lang}')
-            if filename not in files:
-                files[filename] = code
+        if code and len(code) > 10:  # Require minimum code length
+            # Skip if we've already extracted similar code
+            if not any(code[:100] in extracted for extracted in extracted_codes):
+                # Try to infer filename from language
+                ext_map = {
+                    'javascript': 'script.js',
+                    'js': 'script.js',
+                    'html': 'index.html',
+                    'css': 'style.css',
+                    'python': 'script.py',
+                    'py': 'script.py',
+                    'java': 'Main.java',
+                    'cpp': 'main.cpp',
+                    'c': 'main.c',
+                    'json': 'data.json',
+                    'xml': 'data.xml',
+                    'yaml': 'config.yaml',
+                    'yml': 'config.yml',
+                    'html5': 'index.html',
+                    'jsx': 'component.jsx',
+                    'tsx': 'component.tsx',
+                    'typescript': 'script.ts',
+                    'ts': 'script.ts',
+                }
+                filename = ext_map.get(lang.lower(), f'code.{lang}')
+                if filename not in files:
+                    files[filename] = code
+                    extracted_codes.add(code[:100])
     
     # Pattern 3: Look for file creation patterns in text
     # "Create file X with content:"
@@ -204,16 +215,31 @@ def setup_project(task, code_output, summary=""):
     """Complete project setup: create folder, save files, create README."""
     project_path, folder_name = create_project_folder(task)
     
-    # Silent project creation - no verbose output
+    # Save files from code output with debug info
     saved_files = save_files_to_project(project_path, code_output)
     
+    # Debug: Check if any files were actually saved
     if not saved_files:
-        # Save full output if no files detected
-        output_path = os.path.join(project_path, "output.txt")
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(code_output)
-        saved_files = ["output.txt"]
+        # No files extracted - this is a problem
+        print(f"⚠️  Warning: No code files were extracted from the output")
+        print(f"    Looking for code patterns in output...")
+        
+        # Check what code indicators exist
+        indicators = []
+        if "```" in code_output:
+            indicators.append("markdown code blocks (```)")
+        if "<!DOCTYPE" in code_output or "<html" in code_output:
+            indicators.append("HTML tags")
+        if "def " in code_output or "class " in code_output:
+            indicators.append("Python syntax")
+        if "function " in code_output or "const " in code_output:
+            indicators.append("JavaScript syntax")
+        
+        if indicators:
+            print(f"    Found: {', '.join(indicators)}")
+            print(f"    Try checking the output format - files may not be properly formatted")
     
-    create_readme(project_path, task, summary)
+    # Create README regardless
+    readme_path = create_readme(project_path, task, summary)
     
     return project_path, saved_files
